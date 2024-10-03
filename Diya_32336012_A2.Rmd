@@ -1,0 +1,514 @@
+---
+title: Analysis of the Healthiness of Starbucks Beverages
+author: "Diya Ramesh (ID: 32336012)"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: readable
+    source_code: embed
+    vertical_layout: fill 
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(rpart)
+library(rpart.plot)
+library(broomstick)
+library(broom)
+library(kableExtra)
+library(ggResidpanel)
+
+starbucks <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-12-21/starbucks.csv')
+
+```
+
+```{=html}
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600&display=swap');
+
+*, h1, h2, h3, h4, h5, h6, body {
+    font-family: Work Sans;
+}
+</style>
+```
+# Overview
+
+*Report written by Diya Ramesh (32336012)*
+
+------------------------------------------------------------------------
+
+#### Report Overview
+
+The purpose of this report is to determine how **"healthy"** Starbucks beverages are.
+
+The "healthy" parameter is constructed by looking at the following characteristics of the nutritional profile of a Starbucks beverage:
+
+-   Total fat
+-   Total sugar
+-   Total caffeine
+
+The data used in this report is read from [here](https://github.com/rfordatascience/tidytuesday/blob/master/data/2021/2021-12-21/readme.md), which contains the nutritional information of `r length(unique(starbucks$product_name))` Starbucks beverages.\
+<br>
+
+#### Research Questions
+
+The **3** research questions that are explored in this report are the following:
+
+**To what extent do the following factors affect the "healthiness" of a Starbucks beverage:**
+
+1.  **The presence of whipped cream**
+
+2.  **The type of milk used**
+
+3.  **The number of calories in the beverage**
+
+By answering these research questions, the most healthiest and least healthiest Starbucks beverages can be determined which has the potential to positively influence customer's consumption decisions in the future in the view of their physical well being.
+
+<br>
+
+<br>
+
+------------------------------------------------------------------------
+
+#### Report Structure
+
+The content of the report is structured into the following sections:
+
+I.  **Data Wrangling:** Tidying the dataset and performing data wrangling to answer research questions
+
+II. **Data Analysis:** Performing data analysis and showcasing data visualisations to answer the research questions
+
+III. **Data Modelling:** Constructing a model to predict "healthiness" of beverages based on the factors considered in the research questions
+
+IV. **Conclusion:** Summarising findings and deriving interpretations
+
+# I. Data Wrangling
+
+## Row
+
+### Data Cleaning and Wrangling
+
+##### 1.1 Measuring "Unhealthiness"
+
+The variables that are used to measure "healthiness" are:
+
+-   Total fat
+-   Total sugar
+-   Total caffeine
+
+An unhealthy index (referred to as `unhealthy_index` in the dataset) was constructed to combine the effects of the 3 variables to signify how "unhealthy" a beverage was. Therefore - as common sense also alludes to - the more fat, sugar and caffeine a beverage contains, the more unhealthy it is.
+
+With reference to `Table 1.` below, the following steps were taken to construct the `unhealthy_index` in `Table 2.`:
+
+1.  `total_fat_g`, `sugar_g` and `caffeine_mg` are expressed as a proportion of the serving size of the beverage (`serv_size_m_l`)
+
+2.  `unhealthy_index` is defined as the sum of the proportions. The range of this value is $0 < unhealthy{\_}index < 3$. It is expected that $unhealthy{\_}index << 3$ as caffeine is in units of milligrams and it is highly improbable that the proportions of all these variables will be 1.
+
+These quantities are included in `Table 2.` and are highlighted in grey.
+
+<br>
+
+##### 1.2 Handling Inconsistent/Missing Data
+
+It was noticed that espresso beverages had to be handled as they contained differing values for `size` which may have contributed to their serving sizes being recorded as 0 ml. Size in the context of espressos are considered as the number of shots, where each shot is 30 ml (referenced from [here](https://stories.starbucks.com/uploads/2019/01/nutrition-1.pdf)). Thus, `serv_size_m_l` for espressos was mutated accordingly, from this information.
+
+<br>
+
+##### 1.3 Filtering Relevant Data
+
+It was noticed that there were 3 observations in the dataset which were not beverages and hence, irrelevant for my analysis. These were: - Protein & Fibre Powder - Matcha Green Tea Powder - Espresso shot
+
+They also had no serving size values and a different metric for measuring size ("scoop"/"shot"), thus, they were filtered out of the dataset.
+
+Furthermore, other variables which were also irrelevant to the analysis were filtered out, such as:
+
+-   `trans_fat_g`
+-   `saturated_fat_g`
+-   `cholesterol_mg`
+-   `sodium_mg`
+-   `fiber_g`
+
+<br>
+
+##### 1.4 Modifying Variables' Data Types
+
+The `milk` variable - which is a categorical variable - took on values from 0-5. This variable's values were changed to include the type of milk in words to be more descriptive. The data type was also changed from a `double` to a `factor`. This aided the process of data modelling (in part ), given we want the milk regressor to be a categorical dummy rather than a continuous variable.
+
+Similarly, the `whip` variable - which is also a binary categorical dummy - was changed from a `double` data type to a `factor` data type.
+
+**Finally, table 2. shows the final result after data cleaning and wrangling. The observations are arranged in order of descending `unhealthy_index`.**
+
+## Row {.tabset .tabset-fade}
+
+### Table 1. Original Dataset
+
+```{r results='asis', show_col_types = F}
+starbucks$whip <- as.character(starbucks$whip)
+starbucks %>% 
+    kbl() %>% 
+    kable_styling(bootstrap_options = c("striped", "hover", "responsive"), 
+                  full_width = T, 
+                  fixed_thead = T)
+```
+
+### Table 2. Tidy Dataset
+
+```{r result='asis'}
+starbucks_tidy <- starbucks %>% 
+    select(-trans_fat_g, -saturated_fat_g, -cholesterol_mg, -sodium_mg, -fiber_g) %>% 
+    filter(!(size %in% c("1 scoop", "1 shot"))) %>% 
+    mutate(milk = case_when(
+        milk == 0 ~ "None",
+        milk == 1 ~ "Non-Fat",
+        milk == 2 ~ "2%",
+        milk == 3 ~ "Soy",
+        milk == 4 ~ "Coconut",
+        milk == 5 ~ "Whole"
+    )) %>%
+    mutate(serv_size_m_l = case_when(
+        size == "solo" ~ 30,
+        size == "doppio" ~ 60,
+        size == "triple" ~ 90,
+        size == "quad" ~ 120,
+        TRUE ~ serv_size_m_l
+    )) %>% 
+    mutate(total_fat_prop = (total_fat_g / serv_size_m_l),
+           total_caffeine_prop = (caffeine_mg * 0.001 / serv_size_m_l),
+           total_sugar_prop = (sugar_g / serv_size_m_l),
+           unhealthy_index = total_fat_prop + total_caffeine_prop + total_sugar_prop) %>% 
+    arrange(-unhealthy_index) 
+
+starbucks_tidy %>% 
+    kbl() %>% 
+    kable_styling(bootstrap_options = c("striped", "hover", "responsive"), 
+                  full_width = T, 
+                  fixed_thead = T) %>% 
+    column_spec(11:14, background = "lightgrey") %>% 
+    column_spec(14, bold = T)
+
+# starbucks_tidy$milk <- as.factor(starbucks$milk)
+
+starbucks_tidy
+```
+
+# II. Data Analysis
+
+## Column
+
+### Data Analysis
+
+With respect to the research questions, the variables to be investigated are:
+
+-   Calories (`calories`)
+-   Whipped cream (`whip`)
+-   Milk type (`milk`)
+
+The visualisations on the right panel (charts 1-4) showcase the presence and strength of any relationships that may be present between 1 or more of these variables, with `unhealthy_index`.
+
+<br>
+
+##### Chart 1: Looking at how ALL 3 variables contribute to `unhealthy_index`
+
+With chart 1, the following trends can be observed:
+
+-   There is an evident positive, strong correlation between `calories` and `unhealthy_index`. This can be quantified with a correlation value since `calories` is a continuous variable:
+
+$$Corr(calories, unhealthy{\_}index) = `r cor(x = starbucks_tidy$calories, y = starbucks_tidy$unhealthy_index)`$$
+
+-   It is generally observed that beverages with whipped cream (`whip` = 1) have higher unhealthy_index values than those without whipped cream (`whip` = 0). The whipped cream beverages are in the 1st quadrant, whereas the non-whipped cream beverages lie in the 3rd quadrant.
+
+-   The above trends are seen across most milk types which suggests that the milk type does not contribute to unhealthiness as significantly as the other variables being investigated. However, it is noticed that when `milk` = None, this trend differs since most beverages lie in the 3rd quadrant - indicating lower unhealthy_index values. In addition, there are some "healthier" whipped cream beverages (Espresso Con Panna) with a no milk option. Having said this, there are also significantly fewer and differing beverages available with a no milk option.
+
+<br>
+
+##### Chart 2: Looking at how `calories` and `whip` variables contribute to `unhealthy_index`
+
+Chart 2. stores the effect of all milk types from chart 1 to display the strong positive correlation found between calories and unhealthy_index and also the trend of whipped beverages having higher unhealthy_index values than non-whipped, on average.
+
+<br>
+
+##### Chart 3 and 4: Looking at how `milk` and `whip` variables contribute to `unhealthy_index`
+
+Chart 3 is a boxplot from which the following important observations can be made:
+
+```{r}
+starbucks_whip <- starbucks_tidy %>% 
+    filter(whip == 1) %>% 
+    group_by(milk) %>% 
+    summarise(median = median(unhealthy_index)) %>% 
+    summarise(sd = sd(median))
+
+starbucks_no_whip <- starbucks_tidy %>% 
+    filter(whip == 0) %>% 
+    group_by(milk) %>% 
+    summarise(median = median(unhealthy_index)) %>% 
+    summarise(sd = sd(median))
+
+```
+
+-   Again, whipped beverages have significantly higher median `unhealthy_index` values than their no-whip counterparts. The standard deviation of `unhealthy_index` of whipped beverages is very low (sd = `r starbucks_whip$sd`) which suggests the data is clustered together, rather than dispersed.
+
+```{r}
+starbucks_milk_used <- starbucks_tidy %>% 
+    filter(!(milk %in% c("None"))) %>% 
+    group_by(milk) %>% 
+    summarise(median = median(unhealthy_index)) %>% 
+    summarise(sd = sd(median))    
+
+starbucks_incl_no_milk <- starbucks_tidy %>% 
+    group_by(milk) %>% 
+    summarise(median = median(unhealthy_index)) %>% 
+    summarise(sd = sd(median))  
+```
+
+-   On the other hand, there is more variance in the `unhealthy_index` in the no-whip beverages across the milk types, where beverages with no milk have significantly lower median values for `unhealthy_index` (close to 0.00). This is illustrated through how the standard deviation of `unhealthy_index` of non-whipped beverages is higher than whipped beverages which suggests the data is more dispersed.
+
+$$sd(no{\_}whip{\_}) = `r starbucks_no_whip$sd`$$
+
+It is noted that there are a few outliers (Caramel Apple Spice) in the no-milk option with significantly higher `unhealthy_index` values.
+
+-   It does not seem to significantly matter which type of milk is used but having no milk is the significantly healthier option. Comparing the standard deviations of `unhealthy_index` with **all** milk types -- **including and excluding `milk = "None"`**, we can see how significantly the no-milk options influence the variation in `unhealthy_index` in beverages:
+
+$$sd(any{\_}milk{\_}used) = `r starbucks_milk_used$sd`$$ $$sd(no{\_}milk{\_}included) = `r starbucks_incl_no_milk$sd`$$
+
+## Column {.tabset .tabset-fade}
+
+### Chart 1. All Variables
+
+```{r}
+p2 <- ggplot(starbucks_tidy,
+       aes(x = calories, 
+           y = unhealthy_index, 
+           text = product_name))  + 
+    geom_point(aes(colour=whip)) +
+    ggtitle("Effect of calories and whipped cream on unhealthiness") +
+    facet_wrap(~ milk) +
+    theme(plot.title.position = "plot")
+
+ggplotly(p2, tooltip = c("product_name","calories","unhealthy_index"))
+```
+
+### Chart 2. Calories, Whipped Cream
+
+```{r}
+p1 <- ggplot(starbucks_tidy,
+       aes(x = calories, 
+           y = unhealthy_index,
+           text = product_name))  + 
+    geom_point(aes(colour=whip)) +
+    ggtitle("Effect of calories and the presence of whipped cream on unhealthiness")
+ggplotly(p1, tooltip = c("product_name", "calories", "unhealthy_index"))
+```
+
+### Chart 3. Milk, Whipped Cream
+
+```{r}
+p4 <- ggplot(starbucks_tidy,
+       aes(x = milk, 
+           y = unhealthy_index))  + 
+    geom_boxplot(aes(fill = whip)) +
+    ggtitle("Unhealthy index by milk type, based on whip") +
+    labs(x="milk")
+p4
+```
+
+### Chart 4. Milk
+
+```{r}
+p3 <- ggplot(starbucks_tidy,
+       aes(x = milk, 
+           y = unhealthy_index,
+           text = product_name)) + 
+    geom_boxplot(aes(fill = milk)) +
+    ggtitle("Unhealthy index by milk type") +
+    labs(x="milk") +
+    theme(legend.position = "none")
+ggplotly(p3, tooltip = c("product_name", "milk", "unhealthy_index"))
+```
+
+# III. Data Modelling
+
+## Column
+
+### Building a Prediction Model
+
+To answer the research questions, the 3 variables (`calories`, `milk`, `whip`) will be regressed on `unhealthy_index`.
+
+A linear model is constructed where:
+
+-   `milk` is a categorical explanatory variable, which is encoded to be a dummy variable. In the model constructed, `milk = "None"` is set as the base category - this is done to prevent falling in the "dummy variable trap" which results in **multicollinearity**. Therefore, although there are 6 milk dummies, only 5 will be included as regressors in the model, where each regressor can take a binary value of 0 or 1. Note: all the milk regressors are mutually exclusive and exhaustive.
+
+-   `whip` is also a categorical explanatory variable which is encoded to a binary dummy variable which can take the values of `whip = 0` (non-whipped) and `whip = 1` (whipped).
+
+-   `calories` is a continuous explanatory variable which takes on values greater than 0.
+
+```{r}
+starbucks_tidy$milk <- as.factor(starbucks_tidy$milk)
+
+starbucks_tidy$milk <- relevel(starbucks_tidy$milk, ref = "None")
+unhealthy_lm <- lm(unhealthy_index ~ milk + whip + calories, data = starbucks_tidy)
+
+summary <- data.frame(summary(unhealthy_lm)$coefficients)
+
+coeffs <- summary$Estimate
+```
+
+The linear model estimated is as follows:
+
+$$
+unhealthy{\_}index = 𝛽_0 + 𝛽_1milk2\% + 𝛽_2milkCoconut + 𝛽_3milkNonfat + 𝛽_4milkSoy + 𝛽_5milkWhole + 𝛽_6whip + 𝛽_7calories
+$$
+
+Where: 
+$$
+𝛽_0 = `r coeffs[1]`, 𝛽_1 = `r coeffs[2]`, 𝛽_2 = `r coeffs[3]`, 𝛽_3 = `r coeffs[4]`, 𝛽_4 = `r coeffs[5]`, 𝛽_5 = `r coeffs[6]`, 
+𝛽_6 = `r coeffs[7]`, 𝛽_7 = `r coeffs[8]`
+$$
+
+```{r eval=T}
+summary(unhealthy_lm)
+```
+
+<br>
+
+##### Model Coefficients
+
+Considering a significance level of 𝛼 = 0.05, all the regressors are statistically significant as all the p-values are less than 𝛼. As illustrated by charts 3 and 4 in II. Data Analysis, all milk types have higher `unhealthy_index` values than no-milk options, thus it is valid that the coefficients for all the milk regressors are positive -- all the milk options contribute to higher values of `unhealthy_index` than no-milk options. For example, compared to the base category (which is `milk = "None"`), soy milk options will have a higher `unhealthy_index` by $𝛽_4$, on average, **keeping all `calories` and `whip` fixed**.
+
+We can rank to what extent each milk type contributes to the `unhealthy_index` in terms of the magnitude of the coefficients and the following ranking is observed (in terms of healthiest to least healthiest):
+
+1.  `milk` = "None" (Base category)
+2.  `milk` = "Soy" ($𝛽_4$)
+3.  `milk` = "Non-Fat" ($𝛽_3$)
+4.  `milk` = "2%" ($𝛽_1$)
+5.  `milk` = "Whole" ($𝛽_5$)
+6.  `milk` = "Coconut" ($𝛽_2$)
+
+Similarly, `whip` and `calories` also have positive coefficients which suggest the presence of whipped cream and higher calories generally contribute to higher `unhealthy_index` values, keeping `milk` constant.
+
+$𝛽_6$ represents how much `unhealthy_index` will increase in whipped beverages (which is when `whip` = 1) compared to the base category (which is when `whip` = 0), when all other factors are held fixed. $𝛽_7$ represents how much `unhealthy_index` will increase when there is a change of 1 calorie.
+
+Since it is evident that there is an significant disparity between milk options and no-milk options, an alternative model can be looked at as well:
+
+```{r}
+starbucks2 <- starbucks_tidy %>% 
+    filter(!(size %in% c("1 scoop", "1 shot"))) %>% 
+    mutate(has_milk = case_when(
+        milk %in% c("None") ~ 0,
+        !(milk %in% c("None")) ~ 1
+    ))
+
+unhealthy_lm2 <- lm(unhealthy_index ~ has_milk + whip + calories,
+                   data = starbucks2)
+
+summary1 <- data.frame(summary(unhealthy_lm2)$coefficients)
+
+coeffs1 <- summary1$Estimate
+```
+
+The linear model estimated is as follows:
+
+$$
+unhealthy{\_}index = 𝛽_0 + 𝛽_1has{\_}milk + 𝛽_2whip + 𝛽_3calories
+$$
+
+Where:
+
+$$
+𝛽_0 = `r coeffs1[1]`, 𝛽_1 = `r coeffs1[2]`, 𝛽_2 = `r coeffs1[3]`, 𝛽_3 = `r coeffs1[4]`
+$$
+
+```{r eval=T}
+summary(unhealthy_lm2)
+```
+
+In this alternative model, the effect of all the milk options is condensed into a single regressor `has_milk` where `has_milk` acts as a binary dummy variable. $𝛽_1$ represents by how much `unhealthy_index` will increase, on average, with a beverage that has milk (irrespective of what type of milk) compared to a beverage with no milk, keeping all other factors constant.
+
+<br>
+
+##### The Significance and Relevance of $𝛽_0$ in Both Models
+
+It is observed that the value of $𝛽_0$ is very similar in both models, as expected, since the second model has no change in variables and instead, only seeks to represent the milk regressor differently.
+
+$𝛽_0$ is significant here as it represents the `unhealthy_index` when there are 0 calories, no milk and no whipped cream in the beverage.
+
+It is interesting to note that $𝛽_0 \neq 0$ which could suggest why this model is not 100% accurate, and some other important explanatory variables are missing in the model.
+
+<br>
+
+##### Goodness of Fit $R^2$ and Model Residuals
+
+The adjusted coefficient of determination in the first model is $R^2 = 0.6993$ and the adjusted coefficient of the second model is $R^2 = 0.6963$. Thus, this can be interpreted as: 70% of the variation in `unhealthy_index` can be explained by the explanatory variables in this model (`calories`, `milk`, `whip`).
+
+Chart 5 illustrates how the residuals (error terms - the difference between the predicted `unhealthy_index` and actual `unhealthy_index`) vary for each fitted/predicted value of `unhealthy_index`. An ideal model has all the residuals at 0, suggesting there are no errors. A sufficiently good fit model has residuals centered around `residuals` = 0 indicated by the y-intercept of 0 in red, which is observed in the linear model used.
+
+Furthermore, chart 6 delves deeper into observing how the residuals behave. In the histogram, we can see although there is not a perfectly normal distribution around 0, it is sufficiently close for a prediction model, where the mean of the distribution appears to be roughly 0.02 - 0.025. The boxplot also illustrates the same observation, where the median is very close to 0. There are also outlier residuals which are observed.
+
+## Column {.tabset .tabset-fade data-width=350}
+
+### Chart 5. Model Residuals
+
+```{r}
+df1 <- augment(unhealthy_lm) %>% 
+    arrange(.resid)
+    
+df1 %>%
+    ggplot(aes(x = .fitted, y = .resid)) + geom_point() +
+    geom_hline(yintercept = 0, colour = "red") +
+    scale_y_continuous(limits = c(-0.25,0.25)) +
+    labs(x = "Predicted unhealthy_index", y = "Residuals")
+
+```
+
+### Chart 6. Model Residual Panel
+
+```{r}
+resid_panel(unhealthy_lm, plots = "all")
+```
+
+# IV. Conclusion
+
+#### Findings
+
+From this report, the following can be concluded to answer each of the 3 research questions proposed:
+
+1.  There is a positive correlation between the 3 explanatory variables: calories, presence of whipped cream, type of milk used, and the parameter used to measure unhealthiness: the `unhealthy_index`. As mentioned in the Overview, the `unhealthy_index` is composed of total sugar, fat and caffeine in the beverages. Therefore, this conclusion extends to tell us that these 3 explanatory variables influence/contribute to the levels of sugar, fat and caffeine as well.
+
+2.  The type of milk used and the presence of whipped cream have the ability to change `unhealthy_index` by about 0.02 which is significant given the range for `unhealthy_index` is roughly 1.80. A unit change in a calorie results in a much lesser change in `unhealthy_index` as expected, being $𝛽_7 = `r coeffs[8]`$ from the first linear model.
+
+Therefore, in conclusion, all the variables investigated are important to predict how "healthy" a beverage and can predict to a 70% accuracy the index that has been constructed.
+
+<br>
+
+##### How the Findings are Useful
+
+With the conclusion obtained, consumers can use these variables to choose their beverages and make healthier choices. For instance, for a given serving size (say, Grande), the plot below can provide an indication of the least healthiest and most healthiest beverage options for all milk options. The plot is interactive and therefore, can be hovered to see the beverages.
+
+```{r}
+starbucks_grande <- starbucks_tidy %>% 
+    filter(size == "grande") %>% 
+    ggplot(aes(x = calories,
+               y = unhealthy_index,
+               text = product_name)) +
+    geom_point(aes(colour=whip)) +
+    facet_wrap(~milk) +
+    ggtitle("Grande Beverage Options")
+ggplotly(starbucks_grande, tooltip = c("product_name", "milk", "unhealthy_index"))
+
+```
+<br>
+
+##### Limitations of Analysis
+
+The `unhealthy_index` constructed only depended on 3 factors being total sugar, total fat and total caffeine in the beverage whereas unhealthiness depends on a variety of factors beyond this which would be known to someone with an expertise in nutrition and food science. Although the `unhealthy_index` has a possibility of not providing the most holistic view of how "healthy" a beverage really is, it acts as a starting point.
+
+<br>
+
+##### References
+
+1.  TidyTuesday. (2022, October 17). Retrieved September 29, 2023, from GitHub website: <https://github.com/rfordatascience/tidytuesday/blob/master/data/2021/2021-12-21/readme.md#starbucks>
+2.  Using flexdashboard. (n.d.). Retrieved October 15, 2023, from pkgs.rstudio.com website: <https://pkgs.rstudio.com/flexdashboard/articles/using.html#multiple-pages>
+3.  Zhu, H. (2021, February 19). Create Awesome HTML Table with knitr::kable and kableExtra. Retrieved October 9, 2023, from cran.r-project.org website: <https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html>
